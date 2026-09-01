@@ -689,6 +689,50 @@ void OnStart()
    AgVecCheckInt("l10_peak_file_at_the_equity_path_is_rejected", AgEquityLoad(), 2);
    AgVecCheckMoney("l10b_cross_read_adopted_no_value", g_ag_equity_peak, 0.0);
 
+   //--- L, SECOND PART: THE EQUITY TERM OF THE LOCK LEVEL (V2-D6 term
+   //--- arithmetic; the later-anchor case ruled by V2-D16 option (a)).
+   //--- The staleness rules are the peak block's, deliberately and to the
+   //--- letter, because they answer the same three clock cases, so these
+   //--- five read as the mirror of what j7 and j7b assert for the floor.
+   g_ag_login         = AGVEC_LOGIN_EQUITY;
+   g_ag_equity_loaded = true;
+   AgEquityResetModel();
+   g_ag_equity_anchor = A1;
+   g_ag_equity_peak   = 76.7035;
+
+   AgVecCheckMoney("l11_same_day_peak_is_the_peak_minus_the_enforced_limit",
+                   AgEquityEffectiveLevel(109.58, A1), 76.7035 - 109.58);
+
+   //--- An EARLIER anchor is stale and contributes nothing: a leftover file no
+   //--- pass has reconciled because the EA has not run a tick since the
+   //--- rollover, and enforcing it would carry one day's tightening into the
+   //--- next.
+   AgVecCheckMoney("l12_stale_earlier_anchor_contributes_nothing",
+                   AgEquityEffectiveLevel(109.58, A3), -109.58);
+
+   //--- A LATER anchor is what a backward clock step produces. V2-D16 option
+   //--- (a): the value is HELD and stays enforced, mirroring the peak block,
+   //--- because treating it as stale would hand a one-act disarm to anyone
+   //--- able to move the clock back once. l13b is the discriminator: it fails
+   //--- if the later anchor is quietly folded into the stale branch.
+   AgVecCheckMoney("l13_later_anchor_is_held_and_still_enforced",
+                   AgEquityEffectiveLevel(109.58, A0), 76.7035 - 109.58);
+   AgVecCheck("l13b_later_anchor_is_not_treated_as_stale",
+              AgEquityEffectiveLevel(109.58, A0) != -109.58,
+              "a backward clock step dropped the equity term in one act");
+
+   //--- A zero peak contributes nothing, which is the arithmetic rather than a
+   //--- special case: peak minus enforced_limit is then exactly
+   //--- -enforced_limit, the ratchet term, and the MathMax at the call site
+   //--- sees a tie. That tie is what makes chosen=tie the reading of the first
+   //--- pass of any fresh day.
+   g_ag_equity_peak = 0.0;
+   AgVecCheckMoney("l14_zero_peak_is_the_ratchet_term_exactly",
+                   AgEquityEffectiveLevel(109.58, A1), -109.58);
+   g_ag_equity_peak = -5.0;
+   AgVecCheckMoney("l15_negative_peak_contributes_nothing",
+                   AgEquityEffectiveLevel(109.58, A1), -109.58);
+
    PrintFormat("AGVEC|SUMMARY|%d/%d", g_pass, g_total);
   }
 //+------------------------------------------------------------------+

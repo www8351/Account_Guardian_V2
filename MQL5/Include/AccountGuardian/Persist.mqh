@@ -1403,6 +1403,42 @@ int AgEquityLoad()
   }
 
 //+------------------------------------------------------------------+
+//| The equity term of the lock level: the day's running maximum of  |
+//| pnl minus the POST RATCHET enforced_limit, never the raw live    |
+//| limit. V2-D6 mandates the same post-ratchet value D7 mandates    |
+//| for the realized term, so the three terms of the MathMax are     |
+//| computed against one enforced limit and not three.               |
+//|                                                                  |
+//| The staleness rules are the realized peak's, deliberately and to |
+//| the letter, because they answer the same three clock cases and   |
+//| because D2 forbids either mechanism loosening what the other has |
+//| tightened by any path. A peak belonging to an EARLIER day is     |
+//| stale and contributes nothing, which is a leftover file no pass  |
+//| has reconciled because the EA has not run a tick since the       |
+//| rollover. A peak belonging to the SAME day applies, the ordinary |
+//| case. A peak belonging to a LATER day also applies, which is     |
+//| what a backward clock step produces, and holding it is RULED     |
+//| rather than inherited: V2-D16 option (a) mirrors the peak block  |
+//| here for the peak block's own reason, that a one-act disarm is   |
+//| strictly worse than a laborious false trip.                      |
+//|                                                                  |
+//| A peak of zero contributes nothing, which is not a special case  |
+//| but the arithmetic: peak - enforced_limit is then exactly        |
+//| -enforced_limit, the ratchet term, and MathMax at the call site  |
+//| sees a tie. Under V2-D15 option (b) the equity peak rises from   |
+//| sampled pnl alone and is never pulled up by the realized term on |
+//| an ordinary pass, so it may legitimately sit below the realized  |
+//| peak; the three-term MathMax then takes the stricter term and    |
+//| chosen=peak stays observable.                                    |
+//+------------------------------------------------------------------+
+double AgEquityEffectiveLevel(const double enforced_limit, const datetime window_anchor)
+  {
+   if(g_ag_equity_anchor < window_anchor || g_ag_equity_peak <= 0.0)
+      return -enforced_limit;
+   return g_ag_equity_peak - enforced_limit;
+  }
+
+//+------------------------------------------------------------------+
 //| Single-instance mutex heartbeat (SPEC 5, F8).                    |
 //| Live other instance: refuse. Stale mutex heartbeat: takeover.    |
 //| Mutex heartbeat 0 = deliberate release by a clean OnDeinit.      |
