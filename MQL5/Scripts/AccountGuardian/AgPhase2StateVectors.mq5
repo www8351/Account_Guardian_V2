@@ -733,6 +733,113 @@ void OnStart()
    AgVecCheckMoney("l15_negative_peak_contributes_nothing",
                    AgEquityEffectiveLevel(109.58, A1), -109.58);
 
+   //--- L, THIRD PART: THE RECONCILIATION (V2-D4 as scoped by V2-D15 option
+   //--- (b), the line clause of V2-D8, the backward step of V2-D16 option (a)
+   //--- and the save timing of V2-D18 option (a)).
+   //---
+   //--- NO HISTORY IS NEEDED AND NONE IS SELECTED. The equity block reads the
+   //--- realized peak MODEL that AgPeakUpdate has already produced on the same
+   //--- pass, per V2-D15, so these vectors seed g_ag_peak_currency directly
+   //--- and the defect 3 shape 1 FINAL of 2026-08-20 is satisfied in letter:
+   //--- no second walk exists anywhere in the equity block to add.
+   g_ag_login         = AGVEC_LOGIN_EQUITY;
+   g_ag_equity_loaded = true;
+
+   //--- NEVER LOADED SAYS NOTHING, the same shape AgRatchetUpdate and
+   //--- AgPeakUpdate each open with.
+   g_ag_equity_loaded = false;
+   AgVecCheckMoney("l16_never_loaded_contributes_nothing",
+                   AgEquityUpdate(A1, 109.58, 30), -109.58);
+   g_ag_equity_loaded = true;
+
+   //--- NO FILE: the reconstruction stands alone and is taken whole.
+   AgEquityResetModel();                      // anchor 0, the no-file shape
+   g_ag_equity_reconciled = false;
+   g_ag_peak_currency     = 40.00;
+   double eq_lvl = AgEquityUpdate(A1, 109.58, 30);
+   AgVecCheckMoney("l17_no_file_takes_the_reconstruction", g_ag_equity_peak, 40.00);
+   AgVecCheckDT("l17b_no_file_stamps_the_window_anchor", g_ag_equity_anchor, A1);
+   AgVecCheckMoney("l17c_no_file_returns_the_equity_term", eq_lvl, 40.00 - 109.58);
+   AgVecCheck("l17d_reconciliation_marks_itself_done", g_ag_equity_reconciled, "");
+   //--- V2-D18 option (a): ONE IMMEDIATE SAVE AT RECONCILIATION. The write
+   //--- gate of V2-D3 governs rises only and is not extended to this event, so
+   //--- the value must be on disk before any later pass runs.
+   AgEquityResetModel();
+   AgVecCheckInt("l17e_reconciliation_saved_immediately", AgEquityLoad(), 0);
+   AgVecCheckMoney("l17f_the_saved_value_is_the_taken_value", g_ag_equity_peak, 40.00);
+
+   //--- SAME ANCHOR: the stricter of the two, proven in BOTH directions so the
+   //--- vector cannot pass on a max() that silently always picks one side.
+   AgEquityResetModel();
+   g_ag_equity_anchor     = A1;
+   g_ag_equity_peak       = 76.7035;          // persisted above the reconstruction
+   g_ag_equity_reconciled = false;
+   g_ag_peak_currency     = 40.00;
+   AgEquityUpdate(A1, 109.58, 30);
+   AgVecCheckMoney("l18_equal_anchor_takes_the_persisted_value_when_it_is_higher",
+                   g_ag_equity_peak, 76.7035);
+
+   AgEquityResetModel();
+   g_ag_equity_anchor     = A1;
+   g_ag_equity_peak       = 20.00;            // persisted below the reconstruction
+   g_ag_equity_reconciled = false;
+   g_ag_peak_currency     = 40.00;
+   AgEquityUpdate(A1, 109.58, 30);
+   AgVecCheckMoney("l18b_equal_anchor_takes_the_reconstruction_when_it_is_higher",
+                   g_ag_equity_peak, 40.00);
+
+   //--- STALE ANCHOR: the persisted value is 0.00 for the current day (V2-D8),
+   //--- so a large leftover figure from a prior day must contribute NOTHING.
+   //--- 999.00 is deliberately far above the reconstruction: if the stale value
+   //--- leaked into the max this vector reads 999.00 and fails loudly.
+   AgEquityResetModel();
+   g_ag_equity_anchor     = A0;
+   g_ag_equity_peak       = 999.00;
+   g_ag_equity_reconciled = false;
+   g_ag_peak_currency     = 40.00;
+   AgEquityUpdate(A1, 109.58, 30);
+   AgVecCheckMoney("l19_stale_anchor_declines_the_persisted_value", g_ag_equity_peak, 40.00);
+   AgVecCheckDT("l19b_stale_anchor_stamps_the_new_window_anchor", g_ag_equity_anchor, A1);
+
+   //--- BACKWARD CLOCK STEP (V2-D16 option (a)): the model's anchor is LATER
+   //--- than the window anchor. The value is HELD and the max is taken, the
+   //--- anchor is NOT rewound, and the condition is warned on this block's own
+   //--- cadence. l20 fails if the later anchor is folded into the stale branch,
+   //--- which would drop the equity term in a single act.
+   AgEquityResetModel();
+   g_ag_equity_anchor     = A3;
+   g_ag_equity_peak       = 76.7035;
+   g_ag_equity_reconciled = false;
+   g_ag_peak_currency     = 40.00;
+   g_ag_last_equity_warn  = 0;
+   eq_lvl = AgEquityUpdate(A1, 109.58, 30);
+   AgVecCheckMoney("l20_backward_step_holds_the_later_anchored_value",
+                   g_ag_equity_peak, 76.7035);
+   AgVecCheckDT("l20b_backward_step_does_not_rewind_the_anchor", g_ag_equity_anchor, A3);
+   AgVecCheck("l20c_backward_step_warns_on_its_own_cadence",
+              g_ag_last_equity_warn != 0, "no backward-step WARN was emitted");
+   AgVecCheckMoney("l20d_backward_step_still_enforces_the_held_value",
+                   eq_lvl, 76.7035 - 109.58);
+
+   //--- V2-D15 OPTION (b), THE DISCRIMINATOR OF THIS WHOLE SESSION: the max()
+   //--- rule lives at reconciliation and NOWHERE ELSE. Once the session has
+   //--- reconciled, a realized peak that rises must NOT pull the equity peak up
+   //--- on an ordinary pass. Under option (a) this vector would read 500.00 and
+   //--- chosen=peak would be structurally unreachable; under the ruled option
+   //--- (b) the equity peak stays where reconciliation left it and acceptance
+   //--- row V2-H stands.
+   g_ag_peak_currency = 500.00;
+   AgEquityUpdate(A1, 109.58, 30);
+   AgVecCheckMoney("l21_no_per_pass_pull_up_from_the_realized_peak",
+                   g_ag_equity_peak, 76.7035);
+   AgVecCheckDT("l21b_an_ordinary_pass_moves_no_anchor", g_ag_equity_anchor, A3);
+
+   //--- AND THE RECONCILIATION IS ONCE PER SESSION, not once per anchor: a
+   //--- second call with a different window anchor still does not re-run it.
+   AgEquityUpdate(A1 + 172800, 109.58, 30);
+   AgVecCheckMoney("l21c_reconciliation_does_not_run_a_second_time",
+                   g_ag_equity_peak, 76.7035);
+
    PrintFormat("AGVEC|SUMMARY|%d/%d", g_pass, g_total);
   }
 //+------------------------------------------------------------------+

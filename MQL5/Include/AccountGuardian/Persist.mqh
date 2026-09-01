@@ -1252,9 +1252,17 @@ double AgPeakUpdate(const datetime window_anchor, const double enforced_limit,
 //+------------------------------------------------------------------+
 #define AG_EQUITY_FORMAT_VERSION 1
 
-datetime g_ag_equity_anchor = 0;
-double   g_ag_equity_peak   = 0.0;   // the day's running maximum of pnl
-bool     g_ag_equity_loaded = false; // never-loaded-never-written, same rule
+datetime g_ag_equity_anchor     = 0;
+double   g_ag_equity_peak       = 0.0;   // the day's running maximum of pnl
+bool     g_ag_equity_loaded     = false; // never-loaded-never-written, same rule
+bool     g_ag_equity_reconciled = false; // the V2-D4 reconciliation runs once per session
+
+//--- Cadence for the backward-step WARN, local clock, A1 class. Its own
+//--- cadence rather than a share of the ratchet's or the realized peak's, for
+//--- the reason the peak block gives for having its own: mechanisms holding
+//--- against the same rewound clock must each be able to say so, or the
+//--- artifact records one of them and leaves the others looking silent.
+datetime g_ag_last_equity_warn = 0;
 
 string AgEquityPath() { return AG_FILES_DIR + "\\equity_" + (string)g_ag_login + ".dat"; }
 
@@ -1436,6 +1444,135 @@ double AgEquityEffectiveLevel(const double enforced_limit, const datetime window
    if(g_ag_equity_anchor < window_anchor || g_ag_equity_peak <= 0.0)
       return -enforced_limit;
    return g_ag_equity_peak - enforced_limit;
+  }
+
+//+------------------------------------------------------------------+
+//| THE EQUITY PEAK (version 2, ruling set V2-D1 through V2-D18       |
+//| FINAL 2026-09-01). Called from the breach tail beside             |
+//| AgRatchetUpdate and AgPeakUpdate and from nowhere else, so it     |
+//| inherits that region's PRE BREACH ONLY constraint and the Q10,    |
+//| Q10 amendment, Q8 and Q9 guards above it rather than restating    |
+//| any of them.                                                      |
+//|                                                                   |
+//| Returns equity_level, the third term of the lock level. The       |
+//| caller takes MathMax against the ratchet term and the realized    |
+//| peak term, which is V2-D6 composed with D2: stricter always wins, |
+//| in every scenario, no exceptions, and neither peak subsumes the   |
+//| other.                                                            |
+//|                                                                   |
+//| IT SELECTS NO HISTORY AND ADDS NO WALK. That is the whole of what |
+//| V2-D15 settles about this function's inputs: the reconstructed    |
+//| realized peak is read from g_ag_peak_currency, the value          |
+//| AgPeakUpdate produced on this SAME pass a few lines above, so the |
+//| defect 3 shape 1 FINAL of 2026-08-20, no second history walk, is  |
+//| satisfied in letter and there is no second walk here to add. It   |
+//| also means the Q9 deal count read by the caller cannot be         |
+//| disturbed by anything in this function, which is a stronger       |
+//| statement than the realized peak block can make for itself.       |
+//|                                                                   |
+//| ORDERING IS LOAD BEARING and is the caller's obligation: this     |
+//| runs AFTER AgPeakUpdate, because g_ag_peak_currency is only this  |
+//| pass's realized peak once that call has returned.                 |
+//+------------------------------------------------------------------+
+double AgEquityUpdate(const datetime window_anchor, const double enforced_limit,
+                      const int warn_cadence_seconds)
+  {
+   if(!g_ag_equity_loaded)
+      return -enforced_limit;   // never loaded, never written; the peak says nothing
+
+   //--- The realized peak of THIS pass, read from the model rather than
+   //--- recomputed (V2-D15). It is also the DEGRADE TARGET of V2-D4: when the
+   //--- equity file is missing, corrupt, foreign or stale, what remains is
+   //--- exactly this, which is version 1 authority and never nothing.
+   double reconstructed = g_ag_peak_currency;
+
+   //--- FIRST ACTIVE PASS OF THE SESSION: the V2-D4 reconciliation, and under
+   //--- V2-D15 OPTION (b) THIS IS THE ONLY PLACE THE max() RULE LIVES. There
+   //--- is deliberately no per-pass pull-up below: intraday the equity peak
+   //--- rises from sampled pnl alone, per V2-D2 and V2-D3, so it may sit below
+   //--- the realized peak on a day where realized rose while floating was
+   //--- negative. lock_level is unaffected, the three-term MathMax of V2-D6
+   //--- taking the stricter term, and chosen=peak stays observable.
+   if(!g_ag_equity_reconciled)
+     {
+      //--- g_ag_equity_peak carries the PERSISTED value here: AgEquityLoad ran
+      //--- in OnInit and no rise has been sampled yet, so the in-memory term of
+      //--- V2-D4's max() is 0.00 on this pass and the two are the same global.
+      double persisted = g_ag_equity_peak;
+      double taken     = MathMax(persisted, reconstructed);
+      string source    = "no_file";
+      if(g_ag_equity_anchor == 0)
+        {
+         taken  = reconstructed;             // nothing on disk: the realized peak stands alone
+         source = "no_file";
+        }
+      else if(g_ag_equity_anchor == window_anchor)
+        {
+         taken  = MathMax(persisted, reconstructed);   // the stricter of the two
+         source = "equal_anchor_max";
+        }
+      else if(g_ag_equity_anchor < window_anchor)
+        {
+         //--- V2-D8: a prior day's persisted value is 0.00 for the current day.
+         //--- It is stale, not stricter, and it contributes nothing.
+         taken  = reconstructed;
+         source = "stale_anchor_reconstructed";
+        }
+      else
+        {
+         //--- BACKWARD CLOCK STEP, ruled by V2-D16 option (a): mirror the peak
+         //--- block. The later-anchored value is HELD rather than rewound and
+         //--- the max is taken, because treating it as stale would hand a
+         //--- one-act disarm to anyone able to move the clock back once, and a
+         //--- one-act disarm is strictly worse than a laborious false trip.
+         //--- NOTHING IS RAISED FROM A WIDENED WINDOW HERE, and that holds
+         //--- structurally rather than by care: this function selects no
+         //--- history at all, so no window of its own exists to widen. The term
+         //--- it reads is the realized peak model, which the peak block has
+         //--- already resolved under its own backward-step discipline.
+         taken  = MathMax(persisted, reconstructed);
+         source = "backward_step_max";
+
+         datetime now_local_back = TimeLocal();
+         if(g_ag_last_equity_warn == 0
+            || now_local_back - g_ag_last_equity_warn >= warn_cadence_seconds)
+           {
+            AgWarn("equity peak NOT rewound on a backward clock step: window anchor "
+                   + TimeToString(window_anchor, TIME_DATE | TIME_SECONDS)
+                   + " is behind the equity peak's anchor "
+                   + TimeToString(g_ag_equity_anchor, TIME_DATE | TIME_SECONDS)
+                   + "; peak " + DoubleToString(persisted, 2)
+                   + " is held and still enforced, and is not raised from a widened window");
+            g_ag_last_equity_warn = now_local_back;
+           }
+        }
+
+      //--- The line mirrors `realized peak reconciled` including its source
+      //--- field and its field order, which V2-D8 requires by name, so a reader
+      //--- holding both lines reads the two mechanisms the same way.
+      AgInfo("equity peak reconciled|anchor="
+             + TimeToString(window_anchor, TIME_DATE | TIME_SECONDS)
+             + "|reconstructed=" + DoubleToString(reconstructed, 2)
+             + "|persisted=" + DoubleToString(persisted, 2)
+             + "|taken=" + DoubleToString(taken, 2)
+             + "|source=" + source);
+
+      //--- The anchor moves FORWARD ONLY, the peak block's rule applied here
+      //--- for its own reason: on the backward-step case the anchor is held at
+      //--- the later day, so a clock rewind cannot turn the correction back
+      //--- into a rollover and reset the peak in one act.
+      if(window_anchor > g_ag_equity_anchor)
+         g_ag_equity_anchor = window_anchor;
+      g_ag_equity_peak       = taken;
+      g_ag_equity_reconciled = true;
+      //--- V2-D18 option (a): ONE IMMEDIATE SAVE AT RECONCILIATION, mirroring
+      //--- the peak block. V2-D3's write gate scopes itself to the flood of
+      //--- intraday rises and is not extended to this event.
+      AgEquitySave();
+      return AgEquityEffectiveLevel(enforced_limit, window_anchor);
+     }
+
+   return AgEquityEffectiveLevel(enforced_limit, window_anchor);
   }
 
 //+------------------------------------------------------------------+
