@@ -2046,6 +2046,64 @@ Status: DONE
 
 ## DECISIONS
 
+2026-09-01 VERSION 2 RULING SET, V2-D1 TO V2-D14. Ruled by the owner in chat on the ruling sheet derived from the 2026-09-01 read-only planning session, recorded here verbatim from the owner's dictation. Status FINAL on every entry is the owner's mark, not the executor's. The executor adds no ruling, no option, no recommendation.
+
+Issue:  V2-D1. Does floating profit raise the version 2 peak, and which inherited clauses does that supersede.
+Action: OWNER RULING 2026-09-01, option (a). In version 2 the peak is raised by the running maximum of pnl = realized + floating, sampled per V2-D2. This supersedes, BY NAME AND NARROWLY, two clauses of the 2026-08-24 FINAL set, in this repository only: (1) in D1.1 the sentence "Floating profit NEVER raises it" and the sentence following it about a gain that is never closed; (2) in D1.2 the asymmetry sentence "The two halves of this ruling are deliberately asymmetric and the asymmetry is the mechanism: floating can only ever trigger the lock, never move the floor that triggers it." Every other clause of D1.1 and D1.2 stands: partial closures raise the realized peak, and the floor is checked against full account equity including floating PnL. Version 1 and its repository are unchanged and remain realized-only.
+Status: FINAL
+
+Issue:  V2-D2. Sampling cadence of the equity peak.
+Action: OWNER RULING 2026-09-01, option (a). The equity peak is sampled on every timer pass, 1 Hz, from the same pnl AgEvaluateActive already computes. F13 (timer architecture, EventSetTimer(1), OnTick unused) is inherited unchanged and is not reopened; per-tick sampling is not available and is not ruled. No new cadence constant is introduced. Sampling is a read into memory and writes nothing, see V2-D3. The 2026-08-05 "never Equity" ruling stands: the sampled value is pnl, never AccountInfoDouble(ACCOUNT_EQUITY).
+Status: FINAL
+
+Issue:  V2-D3. What triggers the file write and the journal line for an equity peak rise.
+Action: OWNER RULING 2026-09-01, option (b), memory and disk decoupled. The in-memory equity peak rises on any pass where pnl > equity_peak + AG_PNL_EPSILON, inheriting the 2026-08-18 epsilon discipline unchanged. The file and the journal line are written only on the existing AG_LIFE_INTERVAL_SECONDS pass, and only if the in-memory peak changed since the last write. No new constant, no band. The breach comparison on every pass uses the in-memory peak, never the file. Accepted cost, stated now: a crash between two LIFE passes loses at most one LIFE interval of peak rise from the file; the restart path of V2-D4 then applies. Rejected: (a) write on every rise, on the order of 7200 writes for the 2026-08-29 swing, the 2026-08-18 defect shape at scale; (c) a rise band, a new constant with an arbitrary value. D3.2 is satisfied: the write cadence is a persistence rate and defines no boundary.
+Status: FINAL
+
+Issue:  V2-D4. Persistence of the equity peak and its authority on restart. Supersession of D3.1 for the equity peak.
+Action: OWNER RULING 2026-09-01, option (c), B3. The equity peak is persisted. On every pass, and therefore on restart, the taken equity peak is max(persisted_equity_peak, reconstructed_realized_peak, in_memory_equity_peak) for the current anchor. The persisted value may only tighten; it can never take the floor below what deal history proves. A missing, corrupt, login-mismatched or stale-anchor file degrades to the realized peak, that is to version 1 authority, never to nothing. This supersedes, BY NAME AND FOR THE EQUITY PEAK ONLY, two clauses of D3.1: "RECONSTRUCTED FROM TODAY'S DEAL HISTORY" and "The persisted value is a CROSS CHECK ONLY and is never the source of truth." D3.1 stands unchanged for the realized peak. Residual accepted and stated now: the excess of the equity peak over the realized peak survives a restart on the file's word alone, with no server-side witness; a corrupt file that overstates the peak produces a too-tight floor for the day, which fails toward lock. An equity peak rise that would have occurred while the terminal was down is unrecoverable by construction; there is no replay for floating. Rejected: (a) B1 not persisted, a one-act disarm by restart, the shape refused in the backward clock step ruling and in question FOUR; (b) B2 file as sole truth; (d) B4 bar reconstruction, a new data source colliding with defect 3 shape 1 and Q7.
+Status: FINAL
+
+Issue:  V2-D5. The question FIVE clause "NO floating baseline snapshot is taken at the anchor".
+Action: OWNER RULING 2026-09-01, option (a). That clause of the 2026-08-18 question FIVE ruling is superseded BY NAME, in this repository only, to the extent needed for the file of V2-D4 and V2-D8 to exist. Ground, stated on its own and not borrowed from the 2026-08-24 supersession of the neighbouring "NO new persisted artifact" clause: version 2 persists a running maximum of pnl, not a baseline sampled at the anchor, and its authority is bounded by V2-D4 so that it can tighten but never loosen below deal history; the "second source of truth that could disagree with the first" the original clause guarded against is answered by the max() rule, under which disagreement resolves to the stricter side. Every other clause of question FIVE stands: total exposure framing, all open floating loss counts regardless of when earned, re-locking each day on a held loser is intended behaviour.
+Status: FINAL
+
+Issue:  V2-D6. Composition of the lock level with three mechanisms.
+Action: OWNER RULING 2026-09-01, option (a), C1. lock_level = MathMax(ratchet_level, realized_peak_level, equity_peak_level). D2 governs: neither peak dominates the other, evidence journal-20260829-peak-rise-weekend.txt:3416, realized=-127.05 floating=203.75. The realized peak is not subsumed. Question SEVEN's ratchet is untouched in all five elements. equity_peak_level = equity_peak - enforced_limit, with the same post-ratchet enforced_limit D7 mandates for the realized term.
+Status: FINAL
+
+Issue:  V2-D7. The chosen field with three terms.
+Action: OWNER RULING 2026-09-01, option (a). chosen becomes four-valued: ratchet, peak, equity, tie. Rule: when the maximum term is unique the field names its mechanism; when two or more terms share the maximum the field reads tie. The existing code comment stating that ratchet is unreachable while the peak invariant holds is restated for three terms in the implementation, and any observed chosen=ratchet remains a finding.
+Status: FINAL
+
+Issue:  V2-D8. Storage shape of the persisted equity peak.
+Action: OWNER RULING 2026-09-01, option (a). A third file, equity_<login>.dat, with its own format constant AG_EQUITY_FORMAT_VERSION starting at 1. peak_<login>.dat and AG_PEAK_FORMAT_VERSION 1 are untouched, so no migration branch is added on the version 1 file. floor_<login>.dat stays byte identical, D6. state_<login>.dat and AG_STATE_FORMAT_VERSION 1 are untouched, V2-D11. The new file inherits by name: never loaded never written (2026-07-29), login mismatch is CORRUPT_STATE equivalent (2026-07-30), the anchor is stored in the record and a stale anchor makes the persisted value 0.00 for the current day, and the reconciliation journal line mirrors the realized peak's "realized peak reconciled" line including its source field.
+Status: FINAL
+
+Issue:  V2-D9. Equity peak under a stale or frozen quote.
+Action: OWNER RULING 2026-09-01, option (a). The equity peak rises from the last known price unconditionally, exactly as the 2026-08-18 stale quote FINAL has the breach decision act on the last known price as if it were current. AgQuoteFrozen() never suppresses, delays or gates a rise. The equity peak journal line carries quote_frozen, read after the fact and deciding nothing, per question THREE. Accepted and stated now: a stale or anomalous print can set a peak the account never reached, tightening the floor for the day toward lock; the detector is per terminal and cannot see a per-symbol freeze while BTCUSD.ecn ticks; a frozen feed can hide a true maximum exactly as it hides a breach today. No per-symbol detector is added.
+Status: FINAL
+
+Issue:  V2-D10. A position carried across the day anchor.
+Action: OWNER RULING 2026-09-01, option (a). The floating PnL of a position opened before the current anchor participates in the current day's equity peak like any other floating PnL, per the total exposure framing of question FIVE and per F11. No carve-out. Correction recorded against the 2026-09-01 planning brief: under Q1 FINAL, locked_until = next day anchor, at most one lock per day exists by construction, so "n locks per day" is not a case; question FIVE's once-per-day re-lock on a held loser stands unchanged and is not enlarged by version 2. No held-loser-across-midnight event exists in the banked evidence; this ruling is by judgment, and the first measured instance is to be banked and quoted.
+Status: FINAL
+
+Issue:  V2-D11. Equity peak and the Q6/F7 lock snapshot.
+Action: OWNER RULING 2026-09-01, option (a). The equity peak is PRE BREACH ONLY, mirroring D8 exactly. It does not enter the state file snapshot, plays no part in judging a locked window, and plays no part in boot derivation. state_<login>.dat and AG_STATE_FORMAT_VERSION 1 are untouched.
+Status: FINAL
+
+Issue:  V2-D12. The 2026-08-24 accepted-lock-rate clause and version 2.
+Action: OWNER RULING 2026-09-01, option (a). The clause "This mechanism fires more locks than the current one, by construction ... no later session may raise the increased lock rate as a defect" extends to version 2 as written. Version 2's higher lock rate, worked in the planning brief as one additional lock on 2026-08-29 at approximately 13:59:41 across the four banked days, is accepted in advance and is not a defect in any later session.
+Status: FINAL
+
+Issue:  V2-D13. Deployment before Phase 3 sweep and flatten.
+Action: OWNER RULING 2026-09-01, option (a). Version 2 may be deployed under the question TWO interim posture, lock the state machine and send no order, without waiting for Phase 3. Scope ruling only. It is not a deployment ruling: nothing from this repository reaches MT5 until a separate owner ruling recorded here says so, per the 2026-09-01 operational scope entry, RULE A and the D4 sequencing gate.
+Status: FINAL
+
+Issue:  V2-D14. The ACTIVE window between lock expiry and the rollover pass.
+Action: OWNER RULING 2026-09-01, option (a). Accepted as is. The equity peak may rise during the seconds after LOCKED->SYNCING->ACTIVE and before the rollover pass while the previous day's anchor is still live; the rollover reset then discards it. Cost is at most one stale write of a value discarded on the next pass. No anchor-age check is added, D3.2.
+Status: FINAL
+
 Decision: (owner ruling 2026-09-01, given in chat, recorded verbatim) "THE ACCOUNT TRADES EVERYTHING AND EVERYTHING IS LOCKED. The guardian's scope is the whole account, every symbol, every source, mobile included, which the 2026-08-29 and 2026-08-31 evidence proves. BTCUSD.ecn STAYS IN MARKET WATCH PERMANENTLY, so that the guardian's clock, TimeCurrent, follows the account's real trading hours including weekends. The weekend is a trading day: day anchors roll at 01:00 every day including Saturday and Sunday. The weekend is no longer a guaranteed no-tick window, and any earlier test or entry that assumed one is read under this ruling from now on. The 2026-08-01 FINAL's removal of BTCUSD.ecn is superseded in that clause; its frozen-quote protections stand unchanged for any freeze that still occurs." What this entry supersedes, by name and exactly how far: THE 2026-08-01 INSTRUMENT SCOPE FINAL (owner ruling 2026-08-01), its instrument list clause, "Market Watch is XAUUSD.ecn, US100.ecn and XAGUSD.ecn only. BTCUSD.ecn is removed and never returns.", and its weekend no-tick assumption clause, "All subscribed instruments are 24/5, so the weekend close is a reliable no-tick window by design.", AND THOSE TWO CLAUSES ONLY. Every other clause of that FINAL stands untouched and is reaffirmed here: the account still trades gold, NASDAQ and silver among whatever else this ruling adds under "everything", XAUUSD.ecn, US100.ecn and XAGUSD.ecn remain in Market Watch, and the frozen-upper-bound consequence clause is not argued here in either direction.
 Reason: The mechanism the owner ruled on: with a 24/7 instrument absent from Market Watch, a weekend trade placed from the mobile app would run against a guardian whose clock, TimeCurrent, is frozen for the whole weekend, since nothing ticks to advance it, so the guardian's day anchors and its enforcement would sit stale exactly when a mobile trade could move the account. That is the configuration to avoid, not the one to keep. BTCUSD.ecn's continuous quote is what keeps TimeCurrent advancing through the weekend, which is why it stays in Market Watch permanently rather than being treated as an incidental presence.
 Status: FINAL
