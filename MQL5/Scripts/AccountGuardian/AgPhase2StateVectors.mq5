@@ -44,6 +44,8 @@
 #define AGVEC_LOGIN_GUARD      990000007
 #define AGVEC_LOGIN_MISSING    990000009   // deliberately never written
 #define AGVEC_LOGIN_RATCHET    990000011   // Stage 5 floor file
+#define AGVEC_LOGIN_EQUITY     990000012   // version 2 equity peak file
+#define AGVEC_LOGIN_EQUITY_MISSING 990000013   // deliberately never written
 
 int g_pass  = 0;
 int g_total = 0;
@@ -548,6 +550,144 @@ void OnStart()
    AgRatchetUpdate(A0, rt_live, 30);
    AgVecCheckMoney("k6_two_cent_decrease_still_lowers_the_floor",
                    g_ag_floor_currency, rt_live);
+
+   //================================================================
+   //--- L. THE EQUITY PEAK FILE (version 2, V2-D8 FINAL 2026-09-01).
+   //--- Its own file with its own format constant, so `peak_<login>.dat`
+   //--- and AG_PEAK_FORMAT_VERSION are untouched and no migration branch
+   //--- exists on the version 1 file. The family mirrors the peak block
+   //--- function for function, so these vectors mirror the state and floor
+   //--- families' own: a round trip through the real save and load paths, a
+   //--- missing file that is not corrupt, a corrupt file quarantined to a
+   //--- FREE name with the model reset, and a login mismatch handled
+   //--- identically to corruption per the FINAL of 2026-07-30.
+   //---
+   //--- THE ONE DIFFERENCE FROM THE STATE FAMILY IS ASSERTED RATHER THAN
+   //--- DESCRIBED: a corrupt or foreign equity file LOCKS NOTHING. Under
+   //--- V2-D4 it degrades to the realized peak, that is to version 1
+   //--- authority, never to nothing and never to a lock, the equity file
+   //--- not being lock state. l6e and l8d are that assertion.
+   //================================================================
+   g_ag_login         = AGVEC_LOGIN_EQUITY;
+   g_ag_equity_loaded = true;
+   AgEquityResetModel();
+
+   AgVecCheck("l1_equity_path_differs_from_the_peak_and_floor_paths",
+              AgEquityPath() != AgPeakPath() && AgEquityPath() != AgFloorPath(),
+              AgEquityPath());
+   AgVecCheck("l1b_equity_path_names_the_login",
+              StringFind(AgEquityPath(), (string)AGVEC_LOGIN_EQUITY) >= 0, AgEquityPath());
+   AgVecCheck("l2_magic_is_agequity_and_no_other",
+              StringFind(AgEquitySerialize(), "AGEQUITY|") == 0
+              && StringFind(AgEquitySerialize(), "AGPEAK")  < 0
+              && StringFind(AgEquitySerialize(), "AGFLOOR") < 0
+              && StringFind(AgEquitySerialize(), "AGSTATE") < 0, AgEquitySerialize());
+
+   //--- NEVER LOADED, NEVER WRITTEN (FINAL 2026-07-29), the guard the state,
+   //--- floor and peak models each carry and which V2-D8 inherits by name.
+   string eq_path      = AgEquityPath();
+   string eq_seed_body = "AGEQUITY|" + (string)AG_EQUITY_FORMAT_VERSION + "|"
+                         + (string)AGVEC_LOGIN_EQUITY + "\n"
+                         + "E|" + (string)((long)A0) + "|76.70350000\n";
+   AgVecWriteRaw(eq_path, AgVecSealed(eq_seed_body));
+   string eq_before   = AgVecReadRaw(eq_path);
+   g_ag_equity_loaded = false;                // simulate a refused init
+   AgEquityResetModel();                      // default-constructed empty model
+   AgVecCheck("l3_save_refuses_when_the_model_was_never_loaded",
+              !AgEquitySave(), "AgEquitySave returned true");
+   AgVecCheck("l3b_refused_save_left_the_file_byte_identical",
+              AgVecReadRaw(eq_path) == eq_before, "file changed under a refused save");
+
+   //--- ROUND TRIP through the real save and load paths. The peak is stored at
+   //--- AG_STATE_MONEY_DIGITS and not at the printed cent, for the reason the
+   //--- limit snapshot is: V2-D6 subtracts the enforced limit from this value
+   //--- to form equity_level, and the breach comparison one line later runs
+   //--- under a one cent epsilon, so rounding on the way to disk would move the
+   //--- enforced level on every restart. 76.7035 is the measured 2026-08-29 pnl
+   //--- shape, realized -127.05 against floating 203.75, carried to four
+   //--- decimals so the tail is real rather than decorative.
+   g_ag_equity_loaded = true;                 // a legitimate load happened
+   g_ag_equity_anchor = A0;
+   g_ag_equity_peak   = 76.7035;
+   AgVecCheck("l4_save_succeeds_when_loaded", AgEquitySave(), "AgEquitySave returned false");
+   AgEquityResetModel();                      // prove the values come off disk
+   AgVecCheckInt("l4b_roundtrip_load_returns_loaded", AgEquityLoad(), 0);
+   AgVecCheckDT("l4c_roundtrip_anchor", g_ag_equity_anchor, A0);
+   AgVecCheckMoney("l4d_roundtrip_peak", g_ag_equity_peak, 76.7035);
+   AgVecCheck("l4e_peak_keeps_sub_cent_precision",
+              MathAbs(g_ag_equity_peak - 76.70) > 0.0001,
+              "stored peak rounded to the cent: " + DoubleToString(g_ag_equity_peak, 8));
+
+   //--- MISSING FILE: not corrupt, and nothing is written on the way past it.
+   g_ag_login         = AGVEC_LOGIN_EQUITY_MISSING;
+   g_ag_equity_loaded = false;
+   AgVecCheckInt("l5_missing_file_returns_missing", AgEquityLoad(), 1);
+   AgVecCheck("l5b_missing_file_sets_loaded_true", g_ag_equity_loaded, "");
+   AgVecCheckDT("l5c_missing_file_leaves_the_anchor_at_zero", g_ag_equity_anchor, 0);
+   AgVecCheckMoney("l5d_missing_file_leaves_the_peak_at_zero", g_ag_equity_peak, 0.0);
+   AgVecCheck("l5e_missing_file_wrote_nothing", !FileIsExist(AgEquityPath()), AgEquityPath());
+
+   //--- CHECKSUM CORRUPTION: quarantined to a free name, model reset, a fresh
+   //--- file written, and NO LOCK. The state model is reset first so that the
+   //--- no-lock assertion has something to be true against.
+   g_ag_login = AGVEC_LOGIN_EQUITY;
+   eq_path    = AgEquityPath();
+   AgVecWriteRaw(eq_path, AgVecTampered(eq_seed_body));
+   AgStateResetModel();
+   AgVecCheckInt("l6_bad_checksum_returns_corrupt", AgEquityLoad(), 2);
+   AgVecCheckMoney("l6b_corrupt_equity_resets_the_peak", g_ag_equity_peak, 0.0);
+   AgVecCheckDT("l6c_corrupt_equity_resets_the_anchor", g_ag_equity_anchor, 0);
+   AgVecCheck("l6d_corrupt_equity_file_was_quarantined_not_deleted",
+              FileIsExist(eq_path + ".bad") || FileIsExist(eq_path + ".bad.2"),
+              "no quarantine file found for " + eq_path);
+   AgVecCheckInt("l6e_corrupt_equity_locks_nothing",
+                 (long)g_ag_state_reason, (long)AG_LOCK_NONE);
+   AgVecCheck("l6f_a_fresh_equity_file_was_written", FileIsExist(eq_path), eq_path);
+   //--- No re-corruption loop: the file the corrupt branch just wrote must
+   //--- itself load cleanly on the next pass, exactly as e9 requires of the
+   //--- state file.
+   AgVecCheckInt("l6g_fresh_equity_file_reloads_cleanly", AgEquityLoad(), 0);
+
+   //--- QUARANTINE NEVER OVERWRITES AN EARLIER QUARANTINE (FINAL 2026-07-29:
+   //--- lock artifacts are never deleted). The .bad.N chain grows across runs
+   //--- by design and this vector is what reads it.
+   AgVecWriteRaw(eq_path, AgVecTampered(eq_seed_body));
+   AgEquityLoad();
+   AgVecCheck("l7_second_corruption_did_not_reuse_the_first_quarantine_name",
+              FileIsExist(eq_path + ".bad") && FileIsExist(eq_path + ".bad.2"),
+              "expected both .bad and .bad.2 to exist after two corruptions");
+
+   //--- LOGIN MISMATCH: internally valid, correct checksum, correct magic and
+   //--- version, foreign login. The foreign-residue class, handled identically
+   //--- to corruption per the FINAL of 2026-07-30 and inherited by name under
+   //--- V2-D8, and still locking nothing.
+   AgVecWriteRaw(eq_path, AgVecSealed("AGEQUITY|" + (string)AG_EQUITY_FORMAT_VERSION + "|"
+                                      + (string)AGVEC_LOGIN_FOREIGN + "\n"
+                                      + "E|" + (string)((long)A0) + "|76.70350000\n"));
+   AgStateResetModel();
+   AgVecCheckInt("l8_login_mismatch_returns_its_own_code", AgEquityLoad(), 3);
+   AgVecCheckMoney("l8b_foreign_peak_was_not_adopted", g_ag_equity_peak, 0.0);
+   AgVecCheck("l8c_foreign_equity_file_was_quarantined",
+              FileIsExist(eq_path + ".bad") || FileIsExist(eq_path + ".bad.2"),
+              "no quarantine file found for " + eq_path);
+   AgVecCheckInt("l8d_login_mismatch_locks_nothing",
+                 (long)g_ag_state_reason, (long)AG_LOCK_NONE);
+   AgVecCheckInt("l8e_fresh_equity_file_after_mismatch_reloads_cleanly", AgEquityLoad(), 0);
+
+   //--- FORMAT REJECTION: an unknown version, and the cross-read. A version 1
+   //--- PEAK file dropped at the equity path must never be read as an equity
+   //--- peak, which is the whole reason V2-D8 gives the new file its own magic
+   //--- and its own constant rather than a migration branch on the peak file.
+   AgVecWriteRaw(eq_path, AgVecSealed("AGEQUITY|" + (string)(AG_EQUITY_FORMAT_VERSION + 1) + "|"
+                                      + (string)AGVEC_LOGIN_EQUITY + "\n"
+                                      + "E|" + (string)((long)A0) + "|76.70350000\n"));
+   AgVecCheckInt("l9_unknown_equity_format_version_is_rejected", AgEquityLoad(), 2);
+
+   AgVecWriteRaw(eq_path, AgVecSealed("AGPEAK|" + (string)AG_PEAK_FORMAT_VERSION + "|"
+                                      + (string)AGVEC_LOGIN_EQUITY + "\n"
+                                      + "P|" + (string)((long)A0) + "|76.70350000\n"));
+   AgVecCheckInt("l10_peak_file_at_the_equity_path_is_rejected", AgEquityLoad(), 2);
+   AgVecCheckMoney("l10b_cross_read_adopted_no_value", g_ag_equity_peak, 0.0);
 
    PrintFormat("AGVEC|SUMMARY|%d/%d", g_pass, g_total);
   }

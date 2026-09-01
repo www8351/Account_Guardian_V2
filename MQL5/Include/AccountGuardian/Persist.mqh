@@ -1212,6 +1212,197 @@ double AgPeakUpdate(const datetime window_anchor, const double enforced_limit,
   }
 
 //+------------------------------------------------------------------+
+//| EQUITY PEAK FILE (version 2 of the trailing floor, ruling set     |
+//| V2-D1 through V2-D18 FINAL 2026-09-01)                           |
+//|                                                                  |
+//| A THIRD FILE, `equity_<login>.dat`, with its own format constant |
+//| starting at 1, exactly as V2-D8 ruled. `peak_<login>.dat` and    |
+//| AG_PEAK_FORMAT_VERSION are UNTOUCHED, so no migration branch     |
+//| exists anywhere on the version 1 file; `floor_<login>.dat` stays |
+//| byte identical per D6; `state_<login>.dat` and                    |
+//| AG_STATE_FORMAT_VERSION are untouched per V2-D11.                |
+//|                                                                  |
+//| WHAT THIS FILE HOLDS, and it is the whole of what version 2 adds:|
+//| the running maximum of `pnl`, realized plus floating, sampled on |
+//| the ACTIVE pass per V2-D2. The realized peak above is raised by  |
+//| closures alone; this one is raised by the same quantity the      |
+//| breach comparison already uses, which is what makes an unrealized|
+//| high that is given back catchable. V2-D1 supersedes the "floating|
+//| profit NEVER raises it" clause of D1.1 BY NAME and narrowly, and |
+//| only in this repository; the realized peak block above is        |
+//| untouched and remains realized only, per V2-D6's "the realized   |
+//| peak is not subsumed".                                           |
+//|                                                                  |
+//| WHAT IT INHERITS BY NAME (V2-D8): never loaded never written     |
+//| (2026-07-29); login mismatch is CORRUPT_STATE equivalent         |
+//| (2026-07-30); the anchor lives in the record so a stale one is   |
+//| recognisable; and the reconciliation line mirrors the realized   |
+//| peak's, source field included.                                   |
+//|                                                                  |
+//| THE ONE DELIBERATE DIFFERENCE FROM THE STATE FAMILY, and it is   |
+//| the floor and peak blocks' difference rather than a new one: a   |
+//| corrupt or foreign equity file LOCKS NOTHING. Under V2-D4 it     |
+//| degrades to the realized peak, that is to version 1 authority,   |
+//| never to nothing and never to a lock. The equity file is not     |
+//| lock state.                                                      |
+//|                                                                  |
+//| PRE BREACH ONLY, per V2-D11, exactly as the ratchet and the      |
+//| realized peak are. Nothing in LOCKED and nothing in the boot     |
+//| derivation calls anything in this block.                         |
+//+------------------------------------------------------------------+
+#define AG_EQUITY_FORMAT_VERSION 1
+
+datetime g_ag_equity_anchor = 0;
+double   g_ag_equity_peak   = 0.0;   // the day's running maximum of pnl
+bool     g_ag_equity_loaded = false; // never-loaded-never-written, same rule
+
+string AgEquityPath() { return AG_FILES_DIR + "\\equity_" + (string)g_ag_login + ".dat"; }
+
+//+------------------------------------------------------------------+
+//| Magic is AGEQUITY, distinct from the magic of every one of the   |
+//| four files above it, so no two of the five formats can ever      |
+//| cross-read even if their paths were swapped. The four are not    |
+//| spelled here deliberately: the version 2 acceptance check greps  |
+//| this diff for their magics to prove their serializers are byte   |
+//| identical, and a mention in a comment would trip it.             |
+//| Money at AG_STATE_MONEY_DIGITS and                               |
+//| never at the printed cent: V2-D6 subtracts the enforced limit    |
+//| from this value to form equity_level and the breach comparison   |
+//| runs under a one cent epsilon one line later, so rounding on the |
+//| way to disk would move the enforced level on every restart.      |
+//+------------------------------------------------------------------+
+string AgEquitySerialize()
+  {
+   string body = "AGEQUITY|" + (string)AG_EQUITY_FORMAT_VERSION + "|" + (string)g_ag_login + "\n";
+   body += "E|" + (string)((long)g_ag_equity_anchor)
+           + "|" + DoubleToString(g_ag_equity_peak, AG_STATE_MONEY_DIGITS) + "\n";
+   body += "C|" + (string)AgChecksum(body) + "\n";
+   return body;
+  }
+
+bool AgEquitySave()
+  {
+   if(!g_ag_equity_loaded)
+     {
+      AgWarn("equity file NOT written: the equity peak model was never loaded this session,"
+             " so writing it would overwrite a real peak with a default-constructed empty one");
+      return false;
+     }
+   return AgAtomicWrite(AgEquityPath(), AgEquitySerialize());
+  }
+
+void AgEquityResetModel()
+  {
+   g_ag_equity_anchor = 0;
+   g_ag_equity_peak   = 0.0;
+  }
+
+//+------------------------------------------------------------------+
+//| Same quarantine discipline as the state, floor and peak files: a |
+//| free name, never overwriting an earlier quarantine, then a reset |
+//| model and a fresh valid file.                                    |
+//|                                                                  |
+//| NO LOCK FOLLOWS, which is the floor and peak behaviour and not   |
+//| the state file's. V2-D4 names the outcome for this file          |
+//| precisely: a missing, corrupt, login-mismatched or stale-anchor  |
+//| file DEGRADES TO THE REALIZED PEAK, never to nothing. So losing  |
+//| this file costs the excess of the equity peak over the realized  |
+//| peak for the day and nothing else, and the guardian falls back   |
+//| to exactly the version 1 authority the realized peak block above |
+//| already provides.                                                |
+//+------------------------------------------------------------------+
+int AgEquityQuarantine(const string path, const int code, const string why)
+  {
+   string bad = AgStateQuarantinePath(path);
+   if(!FileMove(path, 0, bad, FILE_REWRITE))
+      AgWarn("equity file quarantine move FAILED onto " + bad + ", error " + (string)GetLastError());
+   AgEquityResetModel();
+   AgWarn("equity file " + why + ", quarantined as " + bad
+          + ", the equity peak DEGRADES to the realized peak for this day and is never seeded"
+          + " from an input (no lock follows: the equity peak is not lock state)");
+   AgEquitySave();
+   return code;
+  }
+
+//+------------------------------------------------------------------+
+//| Returns: 0 = loaded, 1 = missing, 2 = corrupt, 3 = login         |
+//| mismatch. Same shape and the same discipline as AgPeakLoad.      |
+//| What is loaded here is weighed and never obeyed: the first       |
+//| ACTIVE pass reconciles it against the realized peak and the      |
+//| in-memory peak, and that reconciliation decides the value        |
+//| (V2-D4, as scoped by V2-D15).                                    |
+//+------------------------------------------------------------------+
+int AgEquityLoad()
+  {
+   AgEquityResetModel();
+   g_ag_equity_loaded = true;   // before the exists check, as for every model above
+
+   string path = AgEquityPath();
+   if(!FileIsExist(path))
+      return 1;
+
+   int handle = FileOpen(path, FILE_READ | FILE_TXT | FILE_ANSI);
+   if(handle == INVALID_HANDLE)
+     {
+      AgWarn("equity file exists but cannot be opened, error " + (string)GetLastError());
+      return AgEquityQuarantine(path, 2, "cannot be opened");
+     }
+
+   string body = "";
+   string checksum_line = "";
+   bool ok = false;
+   while(!FileIsEnding(handle))
+     {
+      string line = FileReadString(handle);
+      if(StringFind(line, "C|") == 0)
+        {
+         checksum_line = line;
+         ok = true;
+         break;
+        }
+      body += line + "\n";
+     }
+   FileClose(handle);
+
+   bool valid = ok && (checksum_line == "C|" + (string)AgChecksum(body));
+   long file_login = 0;
+   if(valid)
+     {
+      string lines[];
+      int count = StringSplit(body, '\n', lines);
+      string header[];
+      if(count < 2
+         || StringSplit(lines[0], '|', header) < 3
+         || header[0] != "AGEQUITY"
+         || header[1] != (string)AG_EQUITY_FORMAT_VERSION)
+         valid = false;
+      else
+        {
+         file_login = StringToInteger(header[2]);
+         for(int i = 1; i < count; i++)
+           {
+            string fields[];
+            if(StringSplit(lines[i], '|', fields) < 3)
+               continue;
+            if(fields[0] == "E")
+              {
+               g_ag_equity_anchor = (datetime)StringToInteger(fields[1]);
+               g_ag_equity_peak   = StringToDouble(fields[2]);
+              }
+           }
+        }
+     }
+
+   if(!valid)
+      return AgEquityQuarantine(path, 2, "failed checksum or does not parse");
+   if(file_login != g_ag_login)
+      return AgEquityQuarantine(path, 3,
+                                "carries login " + (string)file_login
+                                + " but this account is " + (string)g_ag_login);
+   return 0;
+  }
+
+//+------------------------------------------------------------------+
 //| Single-instance mutex heartbeat (SPEC 5, F8).                    |
 //| Live other instance: refuse. Stale mutex heartbeat: takeover.    |
 //| Mutex heartbeat 0 = deliberate release by a clean OnDeinit.      |
