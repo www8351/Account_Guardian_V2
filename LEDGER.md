@@ -2,8 +2,8 @@
 
 ## ISSUES
 
-Issue:  NEXT BEST ACTION. THE VERSION 2 IMPLEMENTATION PLAN IS BANKED AT docs/plans/2026-09-01-v2-implementation-plan.md, md5 2A1511BCFF06D962EBAC85947789C3E5, written by the 2026-09-01 planning session against the fourteen FINAL rulings V2-D1 to V2-D14 alone and against the version 1 source read in full from this tree at main `33b59e5`. The plan maps every ruling onto named functions and line ranges, specifies the equity_<login>.dat surface with AG_EQUITY_FORMAT_VERSION 1, orders the implementation into twelve one-commit tasks in TDD order, drafts acceptance rows V2-A to V2-J in the V1 shape, and raises four owner questions V2-D15 to V2-D18 with closed options and no recommendation. NOT ONE LINE OF VERSION 2 SOURCE EXISTS YET, and NOTHING FROM THIS REPOSITORY IS DEPLOYED.
-Action: OWNER REVIEWS THE PLAN IN CHAT, rules or answers V2-D15 to V2-D18, then a separate implementation session executes the approved tasks one at a time, one commit each, per plan section 3. The plan is not an authorization to write source and no session may treat it as one; the implementation session needs its own instruction.
+Issue:  NEXT BEST ACTION. ALL EIGHTEEN VERSION 2 RULINGS ARE FINAL. V2-D1 to V2-D14 were ruled 2026-09-01 on the ruling sheet and V2-D15 to V2-D18 were ruled 2026-09-01 on section 5 of the banked implementation plan, docs/plans/2026-09-01-v2-implementation-plan.md, md5 2A1511BCFF06D962EBAC85947789C3E5. Nothing in the version 2 specification is open, and section 5 of the plan is spent.
+Action: IMPLEMENTATION IS IN PROGRESS ON BRANCH `v2-impl-20260901`, per plan section 3 as amended by V2-D15 to V2-D18. The amendments, binding on every task: V2-D15 (b) keeps the max() rule inside the reconciliation branch alone, with no per-pass pull-up; V2-D16 (a) builds the backward-step branch now, mirroring the version 1 peak block, in AgEquityEffectiveLevel and in the reconciliation's `source=backward_step_max`; V2-D17 (a) adds nothing; V2-D18 (a) saves immediately at reconciliation and at rollover, which supersedes T7's sentence deferring its write to the T5 gate. T12 NO LONGER EXISTS, its four items being dissolved into T2, T3 and T7. THE NEXT ACTION AFTER THIS SESSION IS OWNER REVIEW OF T1 TO T3 IN CHAT AND AN OWNER-RUN VECTORS PASS IN THE TERMINAL, per RULE A and the dictation protocol; nothing from this repository reaches MT5 until a separate owner ruling recorded here says so, per V2-D13.
 Status: OPEN
 
 Issue:  NEXT BEST ACTION. VERSION 1 OF THE REALIZED PEAK TRAILING FLOOR IS ACCEPTED ON ALL FOUR ROWS, V1-A, V1-B, V1-C AND V1-D, each closed in the 2026-09-01 ACTIONS entry above on the eight files banked at commit `7aef069` and the build identity of owner ruling TWO of 2026-08-31, `AccountGuardian.ex5` md5 `124BA610201A6D67C050572C6A84DE37`, 86866 bytes. Two things remain open and neither is this entry's work to finish.
@@ -2053,6 +2053,24 @@ Status: DONE
 ---
 
 ## DECISIONS
+
+2026-09-01 VERSION 2 RULING SET, SECOND PART, V2-D15 TO V2-D18. Ruled by the owner in chat on section 5 of the banked implementation plan, recorded verbatim from the owner's dictation. Status FINAL on every entry is the owner's mark, not the executor's.
+
+Issue:  V2-D15. Scope of the max() rule in V2-D4, and reachability of chosen=peak.
+Action: OWNER RULING 2026-09-01, option (b). This is a reading of V2-D4, which is not reopened. The max(persisted_equity_peak, reconstructed_realized_peak, in_memory_equity_peak) rule applies at reconciliation, once per session on the first ACTIVE pass, and nowhere else. Intraday the equity peak rises only from sampled pnl per V2-D2 and V2-D3; the realized peak does not pull it up on ordinary passes. Consequence: equity_peak may sit below realized_peak on a day where realized rose while floating was negative, lock_level is unaffected because the three-term MathMax of V2-D6 takes the stricter term, and chosen=peak stays observable, so acceptance row V2-H stands. reconstructed_realized_peak is the value AgPeakUpdate already produced on the same pass, read from g_ag_peak_currency; no history walk is added, per the defect 3 shape 1 FINAL.
+Status: FINAL
+
+Issue:  V2-D16. The equity file and model under a backward clock step, anchor later than the current window anchor.
+Action: OWNER RULING 2026-09-01, option (a). Mirror the version 1 peak block: a later-anchored persisted value or model is held, not rewound; reconciliation takes the max; the condition is warned on the peak block's own cadence; nothing is raised from a widened window. Ground: the backward clock step FINAL, a one-act disarm is strictly worse than a laborious false trip, and D2, neither mechanism may loosen what the other has tightened by any path.
+Status: FINAL
+
+Issue:  V2-D17. The file write on the pass that declares a lock.
+Action: OWNER RULING 2026-09-01, option (a). V2-D3 applies to the letter: no write outside a due-and-changed pass, the declaring pass included. The high the day locked on is recorded by the unconditional lock level line of the declaring pass, which carries equity_peak= and equity_level=, so the audit record exists in the journal. The equity peak plays no part in the locked window (V2-D11) and is discarded at the next rollover, so the file's silence costs nothing functional. No special case is added.
+Status: FINAL
+
+Issue:  V2-D18. Save timing at reconciliation and at rollover.
+Action: OWNER RULING 2026-09-01, option (a). Mirror the version 1 peak block: one immediate save at reconciliation and one immediate save at rollover, two structural writes per day. The V2-D3 write gate governs rises only; V2-D3's scope is the flood of intraday rises and it is not extended to these two events.
+Status: FINAL
 
 2026-09-01 VERSION 2 RULING SET, V2-D1 TO V2-D14. Ruled by the owner in chat on the ruling sheet derived from the 2026-09-01 read-only planning session, recorded here verbatim from the owner's dictation. Status FINAL on every entry is the owner's mark, not the executor's. The executor adds no ruling, no option, no recommendation.
 
